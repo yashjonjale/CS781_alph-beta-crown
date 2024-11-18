@@ -27,7 +27,7 @@ from collections import defaultdict
 
 import arguments
 from auto_LiRPA import BoundedTensor
-from auto_LiRPA.perturbations import PerturbationLpNorm
+from auto_LiRPA.perturbations import PerturbationLpNorm, PerturbationLpNormLocalised
 from auto_LiRPA.utils import stop_criterion_all, stop_criterion_batch_any
 from auto_LiRPA.operators.convolution import BoundConv
 from jit_precompile import precompile_jit_kernels
@@ -115,7 +115,7 @@ class ABCROWN:
 
         model = LiRPANet(model_ori, in_size=data.shape, c=c)
 
-        bound_prop_method = arguments.Config['solver']['bound_prop_method']
+        bound_prop_method = arguments.Config['solver']['bound_prop_method'] #### you specify this in the config file
         if len(apply_output_constraints_to) > 0:
             assert bound_prop_method == 'alpha-crown'
             model.net.constraints = torch.tensor([x[0] for x in specs])
@@ -134,17 +134,26 @@ class ABCROWN:
                     if isinstance(node, BoundConv) and node.mode == 'patches':
                         node.mode = 'matrix'
 
-        if isinstance(input_x, dict):
+        if isinstance(input_x, dict): #### PerturbationSetup.
             # Traditional Lp norm case. Still passed in as an vnnlib variable, but it is passed
             # in as a dictionary.
-            ptb = PerturbationLpNorm(
-                norm=input_x['norm'],
-                eps=input_x['eps'], eps_min=input_x.get('eps_min', 0),
-                x_L=data_lb, x_U=data_ub)
+            if input("Yes or No") == 'Yes':
+                ptb = PerturbationLpNormLocalised(
+                    norm=input_x['norm'], window_size=5,
+                    eps=input_x['eps'])
+            else:
+                ptb = PerturbationLpNorm(
+                    norm=input_x['norm'],
+                    eps=input_x['eps'], eps_min=input_x.get('eps_min', 0),
+                    x_L=data_lb, x_U=data_ub)
+            
         else:
+            print('Using default Lp norm')
             norm = arguments.Config['specification']['norm']
             # Perturbation value for non-Linf perturbations, None for all other cases.
-            ptb = PerturbationLpNorm(norm=norm, x_L=data_lb, x_U=data_ub)
+            # ptb = PerturbationLpNorm(norm=norm, x_L=data_lb, x_U=data_ub)
+            ptb = PerturbationLpNormLocalised(norm=np.inf, window_size=5, eps=0.11764705882353)
+            # ptb = PerturbationLpNorm(norm=np.inf, eps=0.0311764705882353)
         x = BoundedTensor(data, ptb).to(data.device)
         output = model.net(x)
         print_model(model.net)
@@ -254,6 +263,7 @@ class ABCROWN:
 
         data_lb, data_ub = data_lb.to(self.model.device), data_ub.to(self.model.device)
         norm = arguments.Config['specification']['norm']
+        print("IGNORE THIS")
         if data_dict is not None:
             assert isinstance(data_dict['eps'], float)
             ptb = PerturbationLpNorm(
@@ -529,22 +539,17 @@ class ABCROWN:
         if arguments.Config['general']['precompile_jit']:
             precompile_jit_kernels()
 
-        bab_args = arguments.Config['bab'] ## bab stuff
-
-        timeout_threshold = bab_args['timeout'] ## timeout
-
-        select_instance = arguments.Config['data']['select_instance'] ## selecting the datapoint for robustness
-
+        bab_args = arguments.Config['bab']
+        timeout_threshold = bab_args['timeout']
+        select_instance = arguments.Config['data']['select_instance']
         (run_mode, save_path, file_root, example_idx_list, model_ori,
         vnnlib_all, shape) = parse_run_mode()
-
-        self.logger = Logger(run_mode, save_path, timeout_threshold) ######
+        self.logger = Logger(run_mode, save_path, timeout_threshold)
 
         if arguments.Config['general']['return_optimized_model']:
             assert len(example_idx_list) == 1, (
                 'To return the optimized model, only one instance can be processed'
             )
-   
         for new_idx, csv_item in enumerate(example_idx_list):
             arguments.Globals['example_idx'] = new_idx
             vnnlib_id = new_idx + arguments.Config['data']['start']
@@ -560,7 +565,7 @@ class ABCROWN:
             if run_mode != 'customized_data':
                 if len(csv_item) == 3:
                     # model, vnnlib, timeout
-                    model_ori, shape, vnnlib, onnx_path = load_model_and_vnnlib(
+                    model_ori, shape, vnnlib, onnx_path = load_model_and_vnnlib(#### model is loaded
                         file_root, csv_item)
                     arguments.Config['model']['onnx_path'] = os.path.join(file_root, csv_item[0])
                     arguments.Config['specification']['vnnlib_path'] = os.path.join(
@@ -571,7 +576,7 @@ class ABCROWN:
                     assert arguments.Config['model']['input_shape'] is not None, (
                         'vnnlib does not have shape information, '
                         'please specify by --input_shape')
-                    shape = arguments.Config['model']['input_shape']
+                    shape = arguments.Config['model']['input_shape']####shape is loaded
             else:
                 vnnlib = vnnlib_all[new_idx]  # vnnlib_all is a list of all standard vnnlib
 
@@ -640,7 +645,7 @@ class ABCROWN:
             if (not verified_success and (
                     arguments.Config['general']['enable_incomplete_verification']
                     or arguments.Config['general']['complete_verifier'] == 'bab-refine')):
-                incomplete_verification_output = self.incomplete_verifier(
+                incomplete_verification_output = self.incomplete_verifier(### incomplete verifier
                     model_ori,
                     x,
                     data_ub=data_max,
@@ -686,7 +691,7 @@ class ABCROWN:
                     and arguments.Config['general']['complete_verifier'] != 'skip'
                     and verified_status != 'unknown-mip'):
                 batched_vnnlib = batch_vnnlib(vnnlib)  # [x, [(c, rhs, y, pidx)]] in batch-wise
-                verified_status = self.complete_verifier(
+                verified_status = self.complete_verifier( ### complete verifier
                     model_ori, model_incomplete, vnnlib, batched_vnnlib, vnnlib_shape,
                     new_idx, bab_ret=self.logger.bab_ret, cplex_processes=cplex_processes,
                     timeout_threshold=timeout_threshold - (time.time() - self.logger.start_time),

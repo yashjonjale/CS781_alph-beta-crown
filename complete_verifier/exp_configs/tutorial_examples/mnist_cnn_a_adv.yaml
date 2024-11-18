@@ -4,7 +4,7 @@ model:
 data:
   dataset: MNIST
   start: 0
-  end: 100
+  end: 1
   std: [1.]
   mean: [0.]
 specification:
