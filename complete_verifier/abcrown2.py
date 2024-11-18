@@ -44,6 +44,7 @@ from read_vnnlib import read_vnnlib
 from cuts.cut_utils import terminate_mip_processes, terminate_mip_processes_by_c_matching
 from lp_test import compare_optimized_bounds_against_lp_bounds
 
+win_sz = 5
 
 class ABCROWN:
     def __init__(self, args=None, **kwargs):
@@ -134,13 +135,16 @@ class ABCROWN:
                     if isinstance(node, BoundConv) and node.mode == 'patches':
                         node.mode = 'matrix'
 
+        our_eps = arguments.Config['specification']['epsilon']
+
         if isinstance(input_x, dict): #### PerturbationSetup.
             # Traditional Lp norm case. Still passed in as an vnnlib variable, but it is passed
             # in as a dictionary.
-            if input("Yes or No") == 'Yes':
+            
+            if win_sz > 0:
                 ptb = PerturbationLpNormLocalised(
-                    norm=input_x['norm'], window_size=5,
-                    eps=input_x['eps'])
+                    norm=input_x['norm'], window_size=win_sz,
+                    eps=our_eps)
             else:
                 ptb = PerturbationLpNorm(
                     norm=input_x['norm'],
@@ -152,7 +156,10 @@ class ABCROWN:
             norm = arguments.Config['specification']['norm']
             # Perturbation value for non-Linf perturbations, None for all other cases.
             # ptb = PerturbationLpNorm(norm=norm, x_L=data_lb, x_U=data_ub)
-            ptb = PerturbationLpNormLocalised(norm=np.inf, window_size=5, eps=0.11764705882353)
+            if win_sz > 0:
+                ptb = PerturbationLpNormLocalised(norm=np.inf, window_size=win_sz, eps=our_eps)
+            else:
+                ptb = PerturbationLpNorm(norm=np.inf, eps=input_x['eps'])
             # ptb = PerturbationLpNorm(norm=np.inf, eps=0.0311764705882353)
         x = BoundedTensor(data, ptb).to(data.device)
         output = model.net(x)
@@ -538,7 +545,7 @@ class ABCROWN:
             torch.set_default_dtype(torch.float64)
         if arguments.Config['general']['precompile_jit']:
             precompile_jit_kernels()
-
+        win_sz = arguments.Config['window_size']
         bab_args = arguments.Config['bab']
         timeout_threshold = bab_args['timeout']
         select_instance = arguments.Config['data']['select_instance']
