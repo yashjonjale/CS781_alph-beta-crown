@@ -897,17 +897,41 @@ class PerturbationLpNormLocalised(Perturbation):
         return x_L, x_U
     
     @staticmethod
-    def get_deviation(A: torch.Tensor,c:int, I: int, k: int, p: int):
+    def get_deviation_vanilla(A: torch.Tensor, c: int, I: int, k: int, p: int):
         """
-        A - shape (B, O, Chan*I*I)
+        A'sshape: (B, O, Chan*I*I)
+        B: batch size
+        O: output size
+        Chan: number of channels
+        I: image side
         """
-        # print("A shape", A.shape)
-        # print(c, I, k, p)
+
+    @staticmethod
+    def get_deviation(A: torch.Tensor, c: int, I: int, k: int, p: int, method: str='convolve'):
+        """
+        A'sshape: (B, O, Chan*I*I)
+        B: batch size
+        O: output size
+        Chan: number of channels
+        I: image side
+        """
+
         B, O, _ = A.shape
+        if p == np.inf:
+            return torch.abs(A).reshape(B, O, -1).max(dim=-1).values
+
         Avw = (torch.abs(A)**p).reshape(B*O, 1, c, I, I)
-        kernel = torch.ones(1, 1, c, k, k).to(A.device)
-        out = torch.nn.functional.conv3d(Avw, kernel)
-        out = out**(1/p)
+        if method == 'vanilla':
+            unfolded = Avw.unfold(3, k, 1).unfold(4, k, 1).contiguous() # (B*O, c, I-k+1, I-k+1, k, k)
+            unfolded = unfolded.view(B*O, c, -1, k*k) # (B*O, c, (I-k+1)*(I-k+1), k*k)
+            out = unfolded.sum(dim=-1).sum(dim=-1) # (B*O, c, (I-k+1)*(I-k+1))
+            out = out**(1/p)
+
+        elif method == 'convolve':
+            kernel = torch.ones(1, 1, c, k, k).to(A.device)
+            out = torch.nn.functional.conv3d(Avw, kernel) # (B*O, 1, 1, I-k+1, I-k+1)
+            out = out**(1/p) # (B*O, 1, 1, I-k+1, I-k+1)
+        
         out = out.view(B, O, -1).max(dim=-1).values
         return out
 
@@ -932,22 +956,6 @@ class PerturbationLpNormLocalised(Perturbation):
         if not isinstance(A, eyeC):
             A = A.reshape(A.shape[0], A.shape[1], -1) # (batch_size, O, (I*I))
 
-        # if self.norm == np.inf:
-        #     # For L-infinity norm, compute bounds based on element-wise maximum deviations
-        #     x_L, x_U = self.get_input_bounds(x, A)
-        #     x_ub = x_U.reshape(x_U.shape[0], -1, 1)
-        #     x_lb = x_L.reshape(x_L.shape[0], -1, 1)
-        #     center = (x_ub + x_lb) / 2.0  # Center of the interval
-        #     diff = (x_ub - x_lb) / 2.0    # Half-width of the interval
-
-        #     if not isinstance(A, eyeC):
-        #         # Compute bound using the absolute values of A and the diff
-        #         bound = A.matmul(center) + sign * A.abs().matmul(diff) ##basically the dot product calculation
-        #     else:
-        #         # If A is an identity matrix, simply add or subtract the diff
-        #         bound = center + sign * diff
-        # else:
-        #     # For other norms (e.g., L2), use dual norms to compute bounds
         channels, I, _ = x.shape[1], x.shape[2], x.shape[3]
         x = x.reshape(x.shape[0], -1, 1) # (batch_size, channels*I*I, 1)
         # if not isinstance(A, eyeC):
